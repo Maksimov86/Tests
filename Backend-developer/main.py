@@ -5,7 +5,7 @@ from confluent_kafka import Producer, Consumer, KafkaError
 def produce_message(kafka_server, topic, message):
     producer = Producer({'bootstrap.servers': kafka_server})
     producer.produce(topic, message)
-    producer.flush()
+    producer.flush()  # Ждёт завершения отправки всех сообщений
     print(f"Produced message to topic {topic}: {message}")
 
 
@@ -16,21 +16,15 @@ def consume_messages(kafka_server, topic):
         'auto.offset.reset': 'earliest'
     })
     consumer.subscribe([topic])
-    
     print(f"Subscribed to topic {topic}. Waiting for messages...")
-
     try:
         while True:
             msg = consumer.poll(1.0)
-            if msg is None:
-                continue
-            if msg.error():
-                if msg.error().code() == KafkaError._PARTITION_EOF:
-                    continue
-                else:
-                    print(msg.error())
-                    break
-            print(f"Received message: {msg.value().decode('utf-8')}")
+            if msg and not msg.error():
+                print(f"Received message: {msg.value().decode('utf-8')}")
+            elif msg and msg.error().code() != KafkaError._PARTITION_EOF:
+                print(msg.error())
+                break
     except KeyboardInterrupt:
         print("Stopping consumer...")
     finally:
@@ -39,24 +33,16 @@ def consume_messages(kafka_server, topic):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Kafka Producer and Consumer")
-    subparsers = parser.add_subparsers(dest="command")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Producer command
-    produce_parser = subparsers.add_parser('produce')
-    produce_parser.add_argument('--message', required=True, help='Message to send')
-    produce_parser.add_argument('--topic', required=True, help='Kafka topic')
-    produce_parser.add_argument('--kafka', required=True, help='Kafka server address')
-
-    # Consumer command
-    consume_parser = subparsers.add_parser('consume')
-    consume_parser.add_argument('--topic', required=True, help='Kafka topic')
-    consume_parser.add_argument('--kafka', required=True, help='Kafka server address')
+    for cmd, args in {
+        "produce": [("--message", True, "Message to send"), ("--topic", True, "Kafka topic"), ("--kafka", True, "Kafka server address")],
+        "consume": [("--topic", True, "Kafka topic"), ("--kafka", True, "Kafka server address")],
+    }.items():
+        sp = subparsers.add_parser(cmd)
+        for arg, req, desc in args:
+            sp.add_argument(arg, required=req, help=desc)
 
     args = parser.parse_args()
-
-    if args.command == 'produce':
-        produce_message(args.kafka, args.topic, args.message)
-    elif args.command == 'consume':
-        consume_messages(args.kafka, args.topic)
-    else:
-        parser.print_help()
+    func = {"produce": produce_message, "consume": consume_messages}.get(args.command)
+    func(args.kafka, args.topic, getattr(args, "message", None))
